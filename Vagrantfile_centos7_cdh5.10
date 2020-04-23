@@ -1,0 +1,119 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+
+###
+## Required plugins
+###
+#vagrant plugin install vagrant-vbguest
+#vagrant plugin install vagrant-proxyconf
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "centos/7"
+
+  config.vm.provider "virtualbox" do |vb|
+     # Display the VirtualBox GUI when booting the machine
+     vb.gui = false
+     # Customize the amount of memory on the VM. Increased to 6G because of high demanding spark defaults.
+     vb.memory = "4096"
+  end
+
+  if Vagrant.has_plugin?("vagrant-proxyconf")
+    #config.proxy.http     = "http://proxy.indra.es:8080"
+    #config.proxy.https    = "http://proxy.indra.es:8080"
+    #config.proxy.no_proxy = "localhost,127.0.0.1"
+  end
+
+  config.vm.synced_folder ".", "/vagrant"
+  config.vm.network "private_network", ip: "172.30.1.10"
+  config.vm.network "public_network", ip: "172.30.1.10"
+  config.vm.hostname = "node1"
+
+  config.vm.provision "shell", inline: <<-SHELL
+  
+  HOST1='node1'
+  HOST2='node2'  
+  HOST3='node3'
+  IP1='172.30.1.10'
+  IP2='172.30.1.11'
+  IP3='172.30.1.12'
+
+  #Host
+  echo "${IP1} ${HOST1}" |sudo tee -a /etc/hosts
+  echo "${IP2} ${HOST2}" |sudo tee -a /etc/hosts  
+  echo "${IP3} ${HOST3}" |sudo tee -a /etc/hosts
+  
+  #SSH keys
+  sudo -u vagrant sh -c "ssh-keygen -q -N '' -t rsa -f /home/vagrant/.ssh/id_rsa"
+  sudo -u vagrant sh -c "ssh-keyscan -H localhost >> /home/vagrant/.ssh/known_hosts"
+  sudo -u vagrant sh -c "cat /home/vagrant/.ssh/id_rsa.pub >> /home/vagrant/.ssh/authorized_keys"
+  chmod 644 /home/vagrant/.ssh/authorized_keys
+  chmod 644 /home/vagrant/.ssh/known_hosts  
+  
+  #Paquetes previos
+  sudo yum install -y wget -q  mlocate net-tools unzip libaio bc
+  #Cloudera repo
+  sudo wget -q  https://archive.cloudera.com/cm5/redhat/7/x86_64/cm/cloudera-manager.repo -P /etc/yum.repos.d/
+  sudo rpm --import https://archive.cloudera.com/cm5/redhat/7/x86_64/cm/RPM-GPG-KEY-cloudera
+  #Paquetes de Cloudera 5.10
+  echo "Descargando paquetes de Cloudera 5.10..."
+  wget -q https://archive.cloudera.com/cm5/redhat/5/x86_64/cm/5.10.2/RPMS/x86_64/cloudera-manager-server-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm
+  wget -q https://archive.cloudera.com/cm5/redhat/5/x86_64/cm/5.10.2/RPMS/x86_64/cloudera-manager-daemons-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm
+  wget -q https://archive.cloudera.com/cm5/redhat/5/x86_64/cm/5.10.2/RPMS/x86_64/cloudera-manager-server-db-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm
+  wget -q https://archive.cloudera.com/cm5/redhat/5/x86_64/cm/5.10.2/RPMS/x86_64/cloudera-manager-server-db-2-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm
+  wget -q https://archive.cloudera.com/cm5/redhat/5/x86_64/cm/5.10.2/RPMS/x86_64/jdk-6u31-linux-amd64.rpm
+  wget -q https://archive.cloudera.com/cm5/redhat/5/x86_64/cm/5.10.2/RPMS/x86_64/oracle-j2sdk1.7-1.7.0+update67-1.x86_64.rpm
+  #PostgreSQL
+  sudo yum install -y postgresql-server
+  sudo postgresql-setup initdb
+  sudo cat /var/lib/pgsql/data/pg_hba.conf | grep -v ::1/128 | grep -v 127.0.0.1 > /tmp/pg_hba.conf
+  (cat /tmp/pg_hba.conf; echo -e "host\tall\tall\t127.0.0.1/32\tmd5\nhost\tall\tall\t::1/128\tmd5\nhost\tall\tall\t0.0.0.0/0\tmd5") | sudo tee /var/lib/pgsql/data/pg_hba.conf
+  echo "listen_addresses = '*'" | sudo tee -a /var/lib/pgsql/data/postgresql.conf
+  sudo systemctl restart postgresql
+  sudo systemctl enable postgresql
+  cat <<EOF | sudo -u postgres psql
+CREATE ROLE scm LOGIN PASSWORD 'scm';
+CREATE DATABASE scm OWNER scm ENCODING 'UTF8';
+CREATE DATABASE amon OWNER scm ENCODING 'UTF8';
+CREATE DATABASE rman OWNER scm ENCODING 'UTF8';
+CREATE DATABASE hue OWNER scm ENCODING 'UTF8';
+CREATE DATABASE metastore OWNER scm ENCODING 'UTF8';
+CREATE DATABASE sentry OWNER scm ENCODING 'UTF8';
+CREATE DATABASE nav OWNER scm ENCODING 'UTF8';
+CREATE DATABASE navms OWNER scm ENCODING 'UTF8';
+CREATE DATABASE oozie OWNER scm ENCODING 'UTF8';
+ALTER DATABASE metastore SET standard_conforming_strings=off;
+ALTER DATABASE oozie SET standard_conforming_strings=off;
+EOF
+
+  #Instalación de Cloudera 5.10
+  sudo rpm -i cloudera-manager-server-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm cloudera-manager-daemons-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm cloudera-manager-server-db-5.10.2-1.cm5102.p0.9.el5.x86_64.rpm jdk-6u31-linux-amd64.rpm oracle-j2sdk1.7-1.7.0+update67-1.x86_64.rpm
+  
+  #Fichero "hosts"
+  sudo sed -i".old" 1d /etc/hosts
+  
+  #Fichero "db.properties"
+  sudo /usr/share/cmf/schema/scm_prepare_database.sh postgresql scm scm scm
+	
+  #SELinux
+  sudo sed -i".old" 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+
+  #SSH server
+  sudo sed -i".old1" 's/#PermitRootLogin yes/PermitRootLogin yes/' /etc/ssh/sshd_config 
+  sudo sed -i".old2" 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config 
+  sudo sed -i".old3" 's/PasswordAuthentication no/#PasswordAuthentication no/' /etc/ssh/sshd_config 
+  sudo service sshd restart
+
+  #Conector Oracle
+  sudo mkdir /usr/share/java
+  sudo cp /vagrant/ojdbc6.jar /usr/share/java/oracle-connector-java.jar
+  
+
+  sudo systemctl start cloudera-scm-server
+  sudo systemctl enable cloudera-scm-server
+  
+  ## Kerberos
+  sudo yum install -y krb5-server openldap-clients krb5-workstation
+  
+  SHELL
+end
