@@ -113,7 +113,7 @@ EOF
   sudo systemctl enable cloudera-scm-server
   
   ## Kerberos
-  sudo yum install -y krb5-server openldap-clients krb5-workstation
+  sudo yum install -y krb5-server openldap-clients krb5-workstation krb5-server
   
   SHELL
 end
