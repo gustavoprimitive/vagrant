@@ -1,12 +1,7 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
-
-###
-## Required plugins
-###
-#vagrant plugin install vagrant-vbguest
-#vagrant plugin install vagrant-proxyconf
+#CentOS 7 with Cloudera 5.10.2
 
 Vagrant.configure("2") do |config|
   config.vm.box = "centos/7"
@@ -16,12 +11,6 @@ Vagrant.configure("2") do |config|
      vb.gui = false
      # Customize the amount of memory on the VM. Increased to 6G because of high demanding spark defaults.
      vb.memory = "4096"
-  end
-
-  if Vagrant.has_plugin?("vagrant-proxyconf")
-    #config.proxy.http     = "http://proxy.indra.es:8080"
-    #config.proxy.https    = "http://proxy.indra.es:8080"
-    #config.proxy.no_proxy = "localhost,127.0.0.1"
   end
 
   config.vm.synced_folder ".", "/vagrant"
