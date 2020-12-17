@@ -1,0 +1,80 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+#Kibana
+#http://172.30.1.10:5601/app/home#/
+#ElasticHQ
+#http://172.30.1.10:5000/#!/
+
+Vagrant.configure("2") do |config|
+  config.vm.define "master" do |subconfig|
+    subconfig.vm.box = "centos/7"
+    subconfig.vm.hostname = "master"
+    subconfig.vm.network "private_network", ip: "172.30.1.10"
+    config.vm.provider "virtualbox" do |v|
+      v.memory = 2048
+    end
+  end
+
+  (1..2).each do |i|
+      config.vm.define "data#{i}" do |subconfig|
+        subconfig.vm.box = "centos/7"
+        subconfig.vm.hostname = "data#{i}"
+        subconfig.vm.network "private_network", ip: "172.30.1.#{i + 10}"
+        config.vm.provider "virtualbox" do |v|
+          v.memory = 2048
+        end
+      end
+  end
+
+    config.vm.provision "shell", inline: <<-SHELL
+      #Install required packages
+      sudo yum install unzip wget -y
+
+      #File "hosts"
+      echo -e "172.30.1.10\tmaster\n172.30.1.11\tdata1\n172.30.1.12\tdata2" |sudo tee -a /etc/hosts
+
+      #SSH server
+      sudo sed -i".old" 's/#PermitRootLogin yes/PermitRootLogin yes/;s/#PasswordAuthentication yes/PasswordAuthentication yes/;s/PasswordAuthentication no/#PasswordAuthentication no/' /etc/ssh/sshd_config 
+      sudo service sshd restart
+
+      #Elasticsearch
+      sudo mkdir -p /etc/yum.repos.d
+      echo -e "[elasticsearch]\nname=Elasticsearch repository for 7.x packages\nbaseurl=https://artifacts.elastic.co/packages/7.x/yum\ngpgcheck=1\ngpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch\nenabled=0\nautorefresh=1\ntype=rpm-md" |sudo tee /etc/yum.repos.d/elasticsearch.repo
+      sudo yum install --enablerepo=elasticsearch elasticsearch -y
+
+      sudo sed -i".old" "s/#cluster.name: my-application/cluster.name: elastic/;s/#node.name: node-1/node.name: $(hostname)/;s/#network.host: 192.168.0.1/network.host: $(hostname)/;s/#http.port: 9200/http.port: 9200/" /etc/elasticsearch/elasticsearch.yml
+      echo -e "cluster.initial_master_nodes: ['master']" |sudo tee -a /etc/elasticsearch/elasticsearch.yml      
+      echo "discovery.seed_hosts: ['master','data1','data2']" |sudo tee -a /etc/elasticsearch/elasticsearch.yml
+
+      #Only master node
+      if [ $(hostname) == "master" ]; then
+        echo -e "node.master: true\nnode.data: false" |sudo tee -a /etc/elasticsearch/elasticsearch.yml         
+
+        #Kibana
+        echo -e "[kibana-7.x]\nname=Kibana repository for 7.x packages\nbaseurl=https://artifacts.elastic.co/packages/7.x/yum\ngpgcheck=1\ngpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch\nenabled=1\nautorefresh=1\ntype=rpm-md" |sudo tee /etc/yum.repos.d/kibana.repo
+        sudo yum install kibana -y
+        echo -e "server.host: '172.30.1.10'\nelasticsearch.hosts: ['http://master:9200']" |sudo tee -a /etc/kibana/kibana.yml
+        sudo systemctl enable kibana
+        sudo systemctl start kibana
+
+        #ElasticHQ
+        sudo yum install python3-pip.noarch -y
+        wget https://github.com/ElasticHQ/elasticsearch-HQ/archive/master.zip
+        unzip master.zip -d /opt
+        sudo pip3 install -r /opt/elasticsearch-HQ-master/requirements.txt
+        dollar='$'       
+        echo -e "\nif [[ $dollar(ps -fe |grep /opt/elasticsearch-HQ-master/application.py |grep -v grep |wc -l) -eq 0 ]]; then\n\tsudo nohup python3 /opt/elasticsearch-HQ-master/application.py 1>/dev/null 2>/dev/null &\nfi" > /home/vagrant/elastichq
+        chmod a+x /home/vagrant/elastichq
+        echo -e "@reboot\t/home/vagrant/elastichq" |sudo crontab -
+
+      #Data nodes
+      else
+        echo -e "node.master: false\nnode.data: true" |sudo tee -a /etc/elasticsearch/elasticsearch.yml         
+      fi
+
+      sudo systemctl enable elasticsearch
+      sudo systemctl start elasticsearch
+      
+    SHELL
+end
